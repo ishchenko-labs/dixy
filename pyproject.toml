@@ -33,6 +33,7 @@ Issues = "https://github.com/ishchenko-labs/dixy/issues"
 
 [dependency-groups]
 dev = [
+    "anyio>=4.16.0",
     "fastapi>=0.165.0",
     "httpx2>=2.16.2",
     "mypy>=2.4.1",

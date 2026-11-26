@@ -56,17 +56,30 @@ def call_teardown(teardown: Callable[[Any], Any], instance: Any) -> Cleanup:
 
 
 async def run_cleanups(
-    cleanups: Iterable[Cleanup], error: BaseException | None
+    cleanups: Iterable[Cleanup], error: BaseException | None, *, owner: str
 ) -> list[Exception]:
-    """Run every cleanup and return the failures, so one failure skips no other."""
+    """Run every cleanup and return the failures, so one failure skips no other.
+
+    Being cancelled or interrupted part-way skips no cleanup either. The rest
+    still run, told about the interruption unless the work had already failed:
+    whoever awaits this will see it, so nothing may be committed as a success.
+    It is re-raised once they have run, because a cancellation must never be
+    swallowed.
+    """
     failures: list[Exception] = []
+    interruption: BaseException | None = None
     for cleanup in cleanups:
         try:
-            result = cleanup(error)
+            result = cleanup(error if error is not None else interruption)
             if inspect.isawaitable(result):
                 await result
         except Exception as failure:
             failures.append(failure)
+        except BaseException as stop:
+            interruption = interruption or stop
+    if interruption is not None:
+        note_failures(failures, interruption, owner=owner)
+        raise interruption
     return failures
 
 
@@ -293,13 +306,13 @@ class Scope:
     async def teardown(self, error: BaseException | None = None) -> None:
         """Tear down all scoped dependencies in reverse creation order.
 
-        Every cleanup runs even if an earlier one fails; the failures are raised
-        once all have run. Pass the error that ended the scope's work, if one
-        did: lifespans receive it on exit.
+        Every cleanup runs even if an earlier one fails or is cancelled; the
+        failures are raised once all have run. Pass the error that ended the
+        scope's work, if one did: lifespans receive it on exit.
         """
         cleanups = list(reversed(self._cleanups))
         self._cleanups.clear()
-        failures = await run_cleanups(cleanups, error)
+        failures = await run_cleanups(cleanups, error, owner="Scope")
         if cleanups:
             logger.debug("Scope torn down, %d cleanups run", len(cleanups))
         raise_failures(failures)

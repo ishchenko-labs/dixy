@@ -217,7 +217,7 @@ class Container:
         if (stack := self._async_stack) is not None:
             self._async_stack = None
             cleanups.insert(0, functools.partial(exit_lifespan, stack))
-        failures = await run_cleanups(cleanups, exc_val)
+        failures = await run_cleanups(cleanups, exc_val, owner="Container")
         logger.info("Container closed, %d cleanups run", len(cleanups))
         if exc_val is None:
             raise_failures(failures)
