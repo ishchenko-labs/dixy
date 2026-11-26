@@ -142,13 +142,23 @@ class Container:
             reg = self._registry.get(reg.implementation)
         return reg
 
-    @staticmethod
-    def _dependencies_of(reg: Registration, resolver: Resolver) -> set[type]:
-        """Return what a registration needs resolved: an alias needs only its source."""
+    def _dependencies_of(self, reg: Registration, resolver: Resolver) -> set[type]:
+        """Return everything resolved while a registration's instance is created.
+
+        An alias needs only its source. Anything else needs what its constructor,
+        factory or lifespan asks for, plus what its own setup and the setups
+        hooked onto it ask for: those run before the instance is cached, so a
+        dependency that leads back to it would wait on it forever.
+        """
         if reg.strategy == Strategy.ALIAS:
             return {reg.implementation}
         target = reg.factory or reg.lifespan or reg.implementation
-        return resolver.get_dependencies(target, reg.kwargs)
+        deps = resolver.get_dependencies(target, reg.kwargs)
+        hooks = self._hooks.get(reg.interface, [])
+        for setup in (reg.setup, *(hook_reg.setup for hook_reg in hooks)):
+            if setup is not None:
+                deps |= resolver.get_setup_dependencies(setup)
+        return deps
 
     def _new_scope(self) -> Scope:
         scope = Scope(

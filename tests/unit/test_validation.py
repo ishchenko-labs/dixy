@@ -13,7 +13,7 @@ from dixy.exceptions import (
     MissingDependencyError,
 )
 from dixy.module import Module
-from dixy.providers import alias, instance, scoped, singleton, transient
+from dixy.providers import alias, hook, instance, scoped, singleton, transient
 
 
 class CyclicA:
@@ -350,6 +350,134 @@ class TestValidateAliases:
             repo = scoped(SampleRepo)
             irepo = alias(IRepo, SampleRepo)
             service = scoped(Service)
+
+        class GoodContainer(Container):
+            modules = (GoodModule,)
+
+        container = GoodContainer()
+
+        container.validate()
+
+
+class Mediator:
+    def __init__(self) -> None:
+        self.handlers: list[object] = []
+
+
+class OrderHandler:
+    def __init__(self, mediator: Mediator) -> None:
+        self.mediator = mediator
+
+
+def register_order_handler(mediator: Mediator, handler: OrderHandler) -> None:
+    mediator.handlers.append(handler)
+
+
+def register_repo(mediator: Mediator, repo: SampleRepo) -> None:
+    mediator.handlers.append(repo)
+
+
+class TestValidateSetup:
+    def test_raises_for_missing_setup_dependency(self) -> None:
+        class BadModule(Module):
+            mediator = singleton(Mediator, setup=register_repo)
+
+        class BadContainer(Container):
+            modules = (BadModule,)
+
+        container = BadContainer()
+
+        with pytest.raises(MissingDependencyError) as exc_info:
+            container.validate()
+
+        assert exc_info.value.interface is SampleRepo
+        assert exc_info.value.required_by is Mediator
+
+    def test_raises_for_missing_hook_setup_dependency(self) -> None:
+        class OwnerModule(Module):
+            mediator = singleton(Mediator)
+
+        class FeatureModule(Module):
+            handlers = hook(Mediator, setup=register_repo)
+
+        class BadContainer(Container):
+            modules = (OwnerModule, FeatureModule)
+
+        container = BadContainer()
+
+        with pytest.raises(MissingDependencyError) as exc_info:
+            container.validate()
+
+        assert exc_info.value.interface is SampleRepo
+
+    def test_raises_for_cycle_through_setup(self) -> None:
+        class BadModule(Module):
+            mediator = singleton(Mediator, setup=register_order_handler)
+            handler = singleton(OrderHandler)
+
+        class BadContainer(Container):
+            modules = (BadModule,)
+
+        container = BadContainer()
+
+        with pytest.raises(CyclicDependencyError) as exc_info:
+            container.validate()
+
+        assert set(exc_info.value.chain) == {Mediator, OrderHandler}
+
+    def test_raises_for_cycle_through_hook_setup(self) -> None:
+        class OwnerModule(Module):
+            mediator = singleton(Mediator)
+
+        class FeatureModule(Module):
+            handler = singleton(OrderHandler)
+            handlers = hook(Mediator, setup=register_order_handler)
+
+        class BadContainer(Container):
+            modules = (OwnerModule, FeatureModule)
+
+        container = BadContainer()
+
+        with pytest.raises(CyclicDependencyError):
+            container.validate()
+
+    def test_raises_when_singleton_setup_depends_on_scoped(self) -> None:
+        class BadModule(Module):
+            db = singleton(SampleDbPool)
+            repo = scoped(SampleRepo)
+            mediator = singleton(Mediator, setup=register_repo)
+
+        class BadContainer(Container):
+            modules = (BadModule,)
+
+        container = BadContainer()
+
+        with pytest.raises(CaptiveDependencyError) as exc_info:
+            container.validate()
+
+        assert exc_info.value.owner_type is Mediator
+        assert exc_info.value.scoped_type is SampleRepo
+
+    def test_setup_instance_parameter_is_not_a_dependency(self) -> None:
+        def configure(target: SampleSession) -> None:
+            target.open = False
+
+        class GoodModule(Module):
+            mediator = singleton(Mediator, setup=configure)
+            untyped = singleton(SampleDbPool, setup=lambda pool: None)
+
+        class GoodContainer(Container):
+            modules = (GoodModule,)
+
+        container = GoodContainer()
+
+        container.validate()
+
+    def test_satisfied_setup_dependencies_pass(self) -> None:
+        class GoodModule(Module):
+            db = singleton(SampleDbPool)
+            repo = singleton(SampleRepo)
+            mediator = singleton(Mediator, setup=register_repo)
 
         class GoodContainer(Container):
             modules = (GoodModule,)
