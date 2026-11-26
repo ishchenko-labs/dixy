@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Protocol
 
 import pytest
 from tests.samples import SampleDbPool, SampleRepo, SampleSession
@@ -12,7 +13,7 @@ from dixy.exceptions import (
     MissingDependencyError,
 )
 from dixy.module import Module
-from dixy.providers import instance, scoped, singleton, transient
+from dixy.providers import alias, instance, scoped, singleton, transient
 
 
 class CyclicA:
@@ -277,3 +278,82 @@ class TestValidateLifespan:
             Con().validate()
 
         assert exc_info.value.interface is SampleDbPool
+
+
+class IRepo(Protocol):
+    def get(self) -> str: ...
+
+
+class IReadRepo(Protocol):
+    def get(self) -> str: ...
+
+
+class TestValidateAliases:
+    def test_raises_when_alias_source_is_not_registered(self) -> None:
+        class BadModule(Module):
+            db = singleton(SampleDbPool)
+            irepo = alias(IRepo, SampleRepo)
+
+        class BadContainer(Container):
+            modules = (BadModule,)
+
+        container = BadContainer()
+
+        with pytest.raises(MissingDependencyError) as exc_info:
+            container.validate()
+
+        assert exc_info.value.interface is SampleRepo
+        assert exc_info.value.required_by is IRepo
+
+    def test_raises_when_singleton_depends_on_alias_of_scoped(self) -> None:
+        class Service:
+            def __init__(self, repo: IRepo) -> None:
+                self.repo = repo
+
+        class BadModule(Module):
+            db = singleton(SampleDbPool)
+            repo = scoped(SampleRepo)
+            irepo = alias(IRepo, SampleRepo)
+            service = singleton(Service)
+
+        class BadContainer(Container):
+            modules = (BadModule,)
+
+        container = BadContainer()
+
+        with pytest.raises(CaptiveDependencyError) as exc_info:
+            container.validate()
+
+        assert exc_info.value.owner_type is Service
+        assert exc_info.value.scoped_type is SampleRepo
+
+    def test_raises_when_aliases_point_at_each_other(self) -> None:
+        class BadModule(Module):
+            irepo = alias(IRepo, IReadRepo)
+            iread = alias(IReadRepo, IRepo)
+
+        class BadContainer(Container):
+            modules = (BadModule,)
+
+        container = BadContainer()
+
+        with pytest.raises(CyclicDependencyError):
+            container.validate()
+
+    def test_scoped_depending_on_alias_of_scoped_passes(self) -> None:
+        class Service:
+            def __init__(self, repo: IRepo) -> None:
+                self.repo = repo
+
+        class GoodModule(Module):
+            db = singleton(SampleDbPool)
+            repo = scoped(SampleRepo)
+            irepo = alias(IRepo, SampleRepo)
+            service = scoped(Service)
+
+        class GoodContainer(Container):
+            modules = (GoodModule,)
+
+        container = GoodContainer()
+
+        container.validate()

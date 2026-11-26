@@ -113,15 +113,42 @@ class Container:
         return await self._root_scope.resolve(interface)
 
     def _check_access(self, interface: type) -> None:
-        reg = self._registry.get(interface)
-        if reg is None:
+        if interface not in self._registry:
             raise MissingDependencyError(interface)
+
+        reg = self._behind_aliases(interface)
+        if reg is None:
+            return
 
         match reg.strategy:
             case Strategy.SCOPED:
                 raise OutOfScopeError(interface)
-            case Strategy.INSTANCE if interface not in self._singletons:
-                raise InstanceNotProvidedError(interface)
+            case Strategy.INSTANCE if reg.interface not in self._singletons:
+                raise InstanceNotProvidedError(reg.interface)
+
+    def _behind_aliases(self, interface: type) -> Registration | None:
+        """Return the registration an alias chain ends at, or None if it ends nowhere.
+
+        An alias has no lifetime of its own, so every lifetime rule applies to
+        what it points at. A chain that loops ends at an alias, which no rule
+        matches; validate() reports the loop itself.
+        """
+        seen: set[type] = set()
+        reg = self._registry.get(interface)
+        while reg is not None and reg.strategy == Strategy.ALIAS:
+            if reg.interface in seen:
+                break
+            seen.add(reg.interface)
+            reg = self._registry.get(reg.implementation)
+        return reg
+
+    @staticmethod
+    def _dependencies_of(reg: Registration, resolver: Resolver) -> set[type]:
+        """Return what a registration needs resolved: an alias needs only its source."""
+        if reg.strategy == Strategy.ALIAS:
+            return {reg.implementation}
+        target = reg.factory or reg.lifespan or reg.implementation
+        return resolver.get_dependencies(target, reg.kwargs)
 
     def _new_scope(self) -> Scope:
         scope = Scope(
@@ -222,9 +249,7 @@ class Container:
         for reg in self._registry.values():
             if reg.strategy == Strategy.INSTANCE:
                 continue
-            target = reg.factory or reg.lifespan or reg.implementation
-            deps = resolver.get_dependencies(target, reg.kwargs)
-            for dep in deps:
+            for dep in self._dependencies_of(reg, resolver):
                 if dep not in self._registry:
                     raise MissingDependencyError(dep, required_by=reg.interface)
 
@@ -256,8 +281,7 @@ class Container:
             raise CyclicDependencyError([*path[cycle_start:], node])
 
         path.append(node)
-        target = reg.factory or reg.lifespan or reg.implementation
-        for dep in resolver.get_dependencies(target, reg.kwargs):
+        for dep in self._dependencies_of(reg, resolver):
             self._visit(dep, resolver, visited, path)
         path.pop()
         visited.add(node)
@@ -269,20 +293,20 @@ class Container:
         dependency in the permanent root scope, which then never tears down.
         A direct check covers every chain: any deeper capture goes through an
         intermediate that is itself a root-lived provider with a scoped
-        dependency, so it is flagged on its own.
+        dependency, so it is flagged on its own. An alias is no such
+        intermediate, so a dependency is judged by what its aliases end at.
         """
         resolver = Resolver(self._registry)
         for reg in self._registry.values():
             if reg.strategy not in (Strategy.SINGLETON, Strategy.TRANSIENT):
                 continue
-            target = reg.factory or reg.lifespan or reg.implementation
-            for dep in resolver.get_dependencies(target, reg.kwargs):
-                dep_reg = self._registry.get(dep)
+            for dep in self._dependencies_of(reg, resolver):
+                dep_reg = self._behind_aliases(dep)
                 if dep_reg is not None and dep_reg.strategy == Strategy.SCOPED:
                     raise CaptiveDependencyError(
                         owner_type=reg.interface,
                         owner_strategy=reg.strategy.name.lower(),
-                        scoped_type=dep,
+                        scoped_type=dep_reg.interface,
                     )
 
     @classmethod
