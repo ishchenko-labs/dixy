@@ -1,0 +1,33 @@
+name: Bug report
+description: Something in dixy does not work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal example
+      description: The smallest code that shows the problem, with the full traceback if there is one.
+      render: python
+    validations:
+      required: true
+  - type: input
+    id: dixy-version
+    attributes:
+      label: dixy version
+      placeholder: "2.0.0"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.13.1"
+    validations:
+      required: true

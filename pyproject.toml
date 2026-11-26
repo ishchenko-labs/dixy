@@ -1,0 +1,132 @@
+[project]
+name = "dixy"
+version = "2.0.0"
+description = "Minimalist, type-driven dependency injection for async Python."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Mykyta Ishchenko" }]
+keywords = ["dependency-injection", "di", "ioc", "container", "asyncio", "typing"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/ishchenko-labs/dixy"
+Documentation = "https://github.com/ishchenko-labs/dixy/blob/main/docs/README.md"
+Changelog = "https://github.com/ishchenko-labs/dixy/blob/main/CHANGELOG.md"
+Source = "https://github.com/ishchenko-labs/dixy"
+Issues = "https://github.com/ishchenko-labs/dixy/issues"
+
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pydantic>=2.14.3",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
+    "twine>=7.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/docs", "/CHANGELOG.md"]
+
+[tool.uv]
+exclude-newer = "7 days"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+strict_bytes = true
+extra_checks = true
+show_error_codes = true
+explicit_package_bases = true
+mypy_path = ["src"]
+follow_untyped_imports = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = ["integration: marks tests requiring external services"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+show-fixes = true
+exclude = ["*.md"]
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN401", # dynamically typed expressions (Any) disallowed
+    "BLE001", # blind exception catch
+    "COM812", # trailing comma — conflicts with formatter
+    "CPY001", # missing copyright notice
+    "D100", # missing docstring in public module
+    "D101", # missing docstring in public class
+    "D102", # missing docstring in public method
+    "D103", # missing docstring in public function
+    "D104", # missing docstring in public package
+    "D105", # missing docstring in magic method
+    "D107", # missing docstring in __init__
+    "D203", # blank line before class docstring — conflicts with D211
+    "D213", # multi-line summary second line — conflicts with D212
+    "EM101", # exception must not use a string literal
+    "EM102", # exception must not use an f-string literal
+    "FIX001", # line contains FIXME
+    "FIX002", # line contains TODO
+    "FIX003", # line contains XXX
+    "FIX004", # line contains HACK
+    "PLR0913", # too many arguments in function definition
+    "PLR0917", # too many positional arguments
+    "TC001", # typing-only first-party import
+    "TC002", # typing-only third-party import
+    "TC003", # typing-only stdlib import
+    "TD001", # invalid TODO tag (FIXME, XXX)
+    "TD002", # missing author in TODO
+    "TD003", # missing issue link for TODO
+    "TID252", # relative imports from parent modules — allowed within a package
+    "TRY003", # raise with long string message
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "INP001", # implicit namespace package
+    "ARG001", # unused function argument
+    "ARG005", # unused lambda argument
+    "E731", # lambda assignment
+    "PLR2004", # magic value comparison
+    "PLW0108", # unnecessary lambda
+    "PT012", # pytest.raises with multiple statements
+    "S101", # assert usage
+    "S105", # hardcoded password string
+    "S106", # hardcoded password argument
+    "SLF001", # private member access
+]
