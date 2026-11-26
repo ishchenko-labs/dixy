@@ -1,7 +1,7 @@
 # Dixy
 
-[![PyPI](https://img.shields.io/pypi/v/dixy)](https://pypi.org/project/dixy/)
-[![Python](https://img.shields.io/pypi/pyversions/dixy)](https://pypi.org/project/dixy/)
+[![PyPI](https://img.shields.io/pypi/v/dixy?label=pypi)](https://pypi.org/project/dixy/)
+[![Python](https://img.shields.io/pypi/pyversions/dixy?label=python)](https://pypi.org/project/dixy/)
 [![CI](https://github.com/ishchenko-labs/dixy/actions/workflows/ci.yaml/badge.svg)](https://github.com/ishchenko-labs/dixy/actions/workflows/ci.yaml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/ishchenko-labs/dixy/blob/main/LICENSE)
 
