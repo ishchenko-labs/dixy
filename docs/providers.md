@@ -127,4 +127,14 @@ Three rules keep modules predictable:
   callback to another module's provider. This is how a feature module registers its handlers on a
   shared bus without the bus knowing about it.
 
+A hook follows the instance it is attached to:
+
+| The hook names                    | What happens                                                       |
+|-----------------------------------|--------------------------------------------------------------------|
+| A singleton or scoped dependency  | `setup` runs when it is built, `teardown` when it is cleaned up    |
+| An alias                          | The same, for the instance behind the alias                        |
+| A transient                       | `setup` runs for every new instance. `teardown` never runs: nobody tracks a transient |
+| An `instance`                     | Nothing: dixy neither builds nor closes it                         |
+| An interface nobody provides      | [Validation](container.md#validation) reports it                   |
+
 [`modules.py`](../examples/modules.py) shows a hook across modules.

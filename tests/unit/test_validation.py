@@ -359,9 +359,12 @@ class TestValidateAliases:
         container.validate()
 
 
-class Mediator:
+class HandlerRegistry:
     def __init__(self) -> None:
         self.handlers: list[object] = []
+
+
+class Mediator(HandlerRegistry): ...
 
 
 class OrderHandler:
@@ -485,3 +488,56 @@ class TestValidateSetup:
         container = GoodContainer()
 
         container.validate()
+
+
+class TestValidateHookTarget:
+    @pytest.mark.parametrize("callback", ["setup", "teardown"])
+    def test_raises_for_hook_on_an_interface_nobody_provides(
+        self, callback: str
+    ) -> None:
+        def on_mediator(_: Mediator) -> None: ...
+
+        class FeatureModule(Module):
+            handlers = hook(Mediator, **{callback: on_mediator})
+
+        class BadContainer(Container):
+            modules = (FeatureModule,)
+
+        container = BadContainer()
+
+        with pytest.raises(MissingDependencyError) as exc_info:
+            container.validate()
+
+        assert exc_info.value.interface is Mediator
+        assert exc_info.value.required_by is on_mediator
+
+    def test_accepts_hook_on_an_alias(self) -> None:
+        class OwnerModule(Module):
+            mediator = singleton(Mediator)
+            registry = alias(HandlerRegistry, Mediator)
+
+        class FeatureModule(Module):
+            handlers = hook(HandlerRegistry, setup=lambda _: None)
+
+        class GoodContainer(Container):
+            modules = (OwnerModule, FeatureModule)
+
+        GoodContainer().validate()
+
+    def test_raises_for_missing_dependency_of_hook_on_an_alias(self) -> None:
+        class OwnerModule(Module):
+            mediator = singleton(Mediator)
+            registry = alias(HandlerRegistry, Mediator)
+
+        class FeatureModule(Module):
+            handlers = hook(HandlerRegistry, setup=register_repo)
+
+        class BadContainer(Container):
+            modules = (OwnerModule, FeatureModule)
+
+        container = BadContainer()
+
+        with pytest.raises(MissingDependencyError) as exc_info:
+            container.validate()
+
+        assert exc_info.value.interface is SampleRepo

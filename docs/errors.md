@@ -8,7 +8,7 @@ calling it.
 
 | Error                        | Raised                         | Cause                                               | Fix                                                        |
 |------------------------------|--------------------------------|-----------------------------------------------------|------------------------------------------------------------|
-| `MissingDependencyError`     | Validation, or resolving       | A class needs a type that no module provides, or you asked for one | Add a provider, or list the module that has it in the container |
+| `MissingDependencyError`     | Validation, or resolving       | A class or a hook names a type that no module provides, or you asked for one | Add a provider, or list the module that has it in the container |
 | `CyclicDependencyError`      | Validation                     | Dependencies form a loop, through constructors, factories, `setup` callbacks or hooks | Break the loop: extract what both sides need into a third class |
 | `CaptiveDependencyError`     | Validation                     | A singleton or transient depends on a scoped dependency | Make the owner scoped, or the dependency a singleton   |
 | `InstanceNotProvidedError`   | Validation, or resolving       | A dependency declared with `instance` was never bound | Call `bind` before `validate`                            |
