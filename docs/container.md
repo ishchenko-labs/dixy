@@ -52,10 +52,28 @@ rules are the same for both.
 | Rule                                   | What it means                                                       |
 |----------------------------------------|---------------------------------------------------------------------|
 | Reverse order of creation              | A dependency is closed after whatever uses it                       |
-| Every cleanup runs                     | One that fails does not stop the ones after it                      |
+| Every cleanup runs                     | One that fails or is cancelled does not stop the ones after it      |
 | Failures are raised at the end         | A single failure as itself, several as one `ExceptionGroup`         |
 | The work's own error wins              | If the block raised, that error propagates. Cleanup failures are logged and attached to it as notes |
 | A lifespan learns how the work ended   | It receives the error, so it can [commit or roll back](providers.md#reacting-to-how-the-work-ended) |
+| A cancellation is never swallowed      | It is raised again once the remaining cleanups have run             |
+
+### Cancellation during cleanup
+
+A task can be cancelled while it is cleaning up: a client disconnects, a timeout fires, the process
+is told to stop. Dixy still starts every remaining cleanup, and tells the lifespans among them that
+the work was cancelled, so nothing is committed as a success that the caller will see as cancelled.
+
+What dixy cannot do is make a cleanup finish while it is being cancelled itself. Plain asyncio
+cancels a task once, so the remaining cleanups complete. anyio cancel scopes, which Starlette and
+FastAPI use, keep cancelling until the task ends, and that interrupts each cleanup at its first
+`await`. Shield a cleanup that must finish there:
+
+```python
+async def close_session(session: Session) -> None:
+    with anyio.CancelScope(shield=True):
+        await session.close()
+```
 
 ## Validation
 

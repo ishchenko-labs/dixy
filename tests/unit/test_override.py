@@ -7,7 +7,7 @@ from tests.samples import SampleDbPool, SampleFakeRepo, SampleRepo
 from dixy.container import Container
 from dixy.exceptions import MissingDependencyError
 from dixy.module import Module
-from dixy.providers import instance, scoped, singleton
+from dixy.providers import alias, instance, scoped, singleton
 
 
 class AppModule(Module):
@@ -109,3 +109,52 @@ class TestOverride:
             cloned.override(interface=SampleFakeRepo, implementation=SampleFakeRepo)
 
         assert str(exc_info.value) == "No registration found for SampleFakeRepo"
+
+    async def test_override_alias_with_type_replaces_only_the_alias(self) -> None:
+        class ReadOnlyRepo(SampleRepo): ...
+
+        class AliasModule(Module):
+            db = singleton(SampleDbPool, dsn="prod://")
+            repo = scoped(SampleRepo)
+            reader = alias(ReadOnlyRepo, SampleRepo)
+
+        class AliasContainer(Container):
+            modules = (AliasModule,)
+
+        class FakeReader(ReadOnlyRepo): ...
+
+        cloned = AliasContainer().clone()
+
+        cloned.override(interface=ReadOnlyRepo, implementation=FakeReader)
+
+        cloned.validate()
+        async with cloned.scope() as scope:
+            reader = await scope.resolve(ReadOnlyRepo)
+            same_reader = await scope.resolve(ReadOnlyRepo)
+            repo = await scope.resolve(SampleRepo)
+
+        assert isinstance(reader, FakeReader)
+        assert reader is same_reader
+        assert type(repo) is SampleRepo
+
+    async def test_override_instance_with_type_builds_it_once(self) -> None:
+        class InstanceModule(Module):
+            pool = instance(SampleDbPool)
+
+        class InstanceContainer(Container):
+            modules = (InstanceModule,)
+
+        class FakePool(SampleDbPool): ...
+
+        container = InstanceContainer()
+        container.bind(SampleDbPool, SampleDbPool("prod://"))
+        cloned = container.clone()
+
+        cloned.override(interface=SampleDbPool, implementation=FakePool)
+
+        cloned.validate()
+        pool = await cloned.resolve(SampleDbPool)
+
+        assert isinstance(pool, FakePool)
+        assert pool is await cloned.resolve(SampleDbPool)
+        assert type(await container.resolve(SampleDbPool)) is SampleDbPool

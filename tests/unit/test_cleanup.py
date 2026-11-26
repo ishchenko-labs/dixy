@@ -1,7 +1,10 @@
+import asyncio
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager, suppress
 from typing import Any
 
+import anyio
+import anyio.lowlevel
 import pytest
 
 from dixy import Container, Inject, Module, inject, scoped, singleton
@@ -27,6 +30,22 @@ def fail(_: object) -> None:
 
 def fail_again(_: object) -> None:
     raise LookupError("another teardown failed")
+
+
+class Hanging:
+    """A teardown that never finishes on its own, and says when it has started."""
+
+    def __init__(self) -> None:
+        self._started = asyncio.Event()
+
+    async def __call__(self, _: object) -> None:
+        self._started.set()
+        await asyncio.Event().wait()
+
+    async def started(self) -> None:
+        """Wait for the teardown to start, and fail the test if it was skipped."""
+        async with asyncio.timeout(1):
+            await self._started.wait()
 
 
 def recording_lifespans() -> tuple[list[Session], dict[str, Callable[[], Any]]]:
@@ -269,3 +288,154 @@ class TestContainerTeardownFailures:
                 raise ValueError("app failed")
 
         assert sessions[0].outcome == "rolled back"
+
+
+class TestCancelledTeardown:
+    async def test_runs_every_teardown_when_one_is_cancelled(self) -> None:
+        closed: list[object] = []
+        hanging = Hanging()
+        container = scope_container(closed.append, hanging, closed.append)()
+
+        async def work() -> list[object]:
+            async with container.scope() as scope:
+                return [
+                    await scope.resolve(First),
+                    await scope.resolve(Second),
+                    await scope.resolve(Third),
+                ]
+
+        task = asyncio.create_task(work())
+        await hanging.started()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert [type(resource) for resource in closed] == [Third, First]
+
+    async def test_second_cancellation_stops_only_the_teardown_it_lands_on(
+        self,
+    ) -> None:
+        closed: list[object] = []
+        hanging, hanging_too = Hanging(), Hanging()
+        container = scope_container(closed.append, hanging_too, hanging)()
+
+        async def work() -> None:
+            async with container.scope() as scope:
+                await scope.resolve(First)
+                await scope.resolve(Second)
+                await scope.resolve(Third)
+
+        task = asyncio.create_task(work())
+        await hanging.started()
+        task.cancel()
+        await hanging_too.started()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert [type(resource) for resource in closed] == [First]
+
+    async def test_cancellation_outlives_a_failing_teardown(self) -> None:
+        hanging = Hanging()
+        container = scope_container(fail, hanging, lambda _: None)()
+
+        async def work() -> None:
+            async with container.scope() as scope:
+                await scope.resolve(First)
+                await scope.resolve(Second)
+
+        task = asyncio.create_task(work())
+        await hanging.started()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError) as exc_info:
+            await task
+        assert exc_info.value.__notes__ == [
+            "Scope teardown also failed: RuntimeError('teardown failed')"
+        ]
+
+    async def test_lifespan_rolls_back_when_teardown_is_cancelled(self) -> None:
+        sessions, lifespans = recording_lifespans()
+        hanging = Hanging()
+
+        class Resources(Module):
+            session = scoped(Session, lifespan=lifespans["async"])
+            slow = scoped(First, teardown=hanging)
+
+        class App(Container):
+            modules = (Resources,)
+
+        container = App()
+
+        async def work() -> None:
+            async with container.scope() as scope:
+                await scope.resolve(Session)
+                await scope.resolve(First)
+
+        task = asyncio.create_task(work())
+        await hanging.started()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert [session.outcome for session in sessions] == ["rolled back"]
+
+    async def test_runs_every_singleton_teardown_when_one_is_cancelled(self) -> None:
+        closed: list[object] = []
+        hanging = Hanging()
+        app = singleton_container(closed.append, hanging, closed.append)
+
+        async def work() -> None:
+            async with app() as container:
+                await container.resolve(First)
+                await container.resolve(Second)
+                await container.resolve(Third)
+
+        task = asyncio.create_task(work())
+        await hanging.started()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert [type(resource) for resource in closed] == [Third, First]
+
+
+class TestRepeatedCancellation:
+    """anyio cancels a scope's task again at every wait until the scope is left."""
+
+    @staticmethod
+    async def close_within(app: type[Container]) -> None:
+        with anyio.move_on_after(0.01) as deadline:
+            async with app().scope() as scope:
+                await scope.resolve(First)
+                await scope.resolve(Second)
+                await scope.resolve(Third)
+        assert deadline.cancelled_caught
+
+    async def test_shielded_teardown_finishes(self) -> None:
+        closed: list[object] = []
+
+        async def close_shielded(resource: object) -> None:
+            with anyio.CancelScope(shield=True):
+                await anyio.lowlevel.checkpoint()
+                closed.append(resource)
+
+        await self.close_within(
+            scope_container(close_shielded, close_shielded, Hanging())
+        )
+
+        assert [type(resource) for resource in closed] == [Second, First]
+
+    async def test_unshielded_teardown_is_started_but_cancelled(self) -> None:
+        started: list[object] = []
+        closed: list[object] = []
+
+        async def close(resource: object) -> None:
+            started.append(resource)
+            await anyio.lowlevel.checkpoint()
+            closed.append(resource)
+
+        await self.close_within(scope_container(close, close, Hanging()))
+
+        assert [type(resource) for resource in started] == [Second, First]
+        assert closed == []

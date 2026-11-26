@@ -53,6 +53,7 @@ class Container:
 
     def __init__(self, *, lifespan: Lifespan[Container] | None = None) -> None:
         self._registry: dict[type, Registration] = {}
+        self._declared_hooks: list[Registration] = []
         self._hooks: dict[type, list[Registration]] = {}
         self._singletons: dict[type, Any] = {}
         self._singleton_lifespans: dict[type, Any] = {}
@@ -79,12 +80,26 @@ class Container:
             for provider in module_cls.get_providers():
                 reg = provider.to_registration()
                 if reg.strategy == Strategy.HOOK:
-                    hook_target = cast("type", reg.hook_target)
-                    self._hooks.setdefault(hook_target, []).append(reg)
+                    self._declared_hooks.append(reg)
                     continue
                 if (existing := self._registry.get(reg.interface)) is not None:
                     self._check_registration_conflict(new=reg, existing=existing)
                 self._registry[reg.interface] = reg
+        self._index_hooks()
+
+    def _index_hooks(self) -> None:
+        """File every hook under the registration that creates its target's instance.
+
+        A hook may name an alias, and the instance behind an alias is created by
+        its source, so that is where the hook has to be found. The index is
+        rebuilt in place because scopes share it.
+        """
+        self._hooks.clear()
+        for hook_reg in self._declared_hooks:
+            target = cast("type", hook_reg.hook_target)
+            owner = self._behind_aliases(target)
+            key = owner.interface if owner is not None else target
+            self._hooks.setdefault(key, []).append(hook_reg)
 
     @staticmethod
     def _check_registration_conflict(
@@ -217,7 +232,7 @@ class Container:
         if (stack := self._async_stack) is not None:
             self._async_stack = None
             cleanups.insert(0, functools.partial(exit_lifespan, stack))
-        failures = await run_cleanups(cleanups, exc_val)
+        failures = await run_cleanups(cleanups, exc_val, owner="Container")
         logger.info("Container closed, %d cleanups run", len(cleanups))
         if exc_val is None:
             raise_failures(failures)
@@ -252,6 +267,7 @@ class Container:
         """Validate the dependency graph at startup."""
         try:
             self._check_instances()
+            self._check_hooks()
             self._check_missing()
             self._check_cycles()
             self._check_captive()
@@ -267,6 +283,15 @@ class Container:
                 and reg.interface not in self._singletons
             ):
                 raise InstanceNotProvidedError(reg.interface)
+
+    def _check_hooks(self) -> None:
+        """Reject a hook on an interface nobody provides: it would never run."""
+        for hook_reg in self._declared_hooks:
+            target = cast("type", hook_reg.hook_target)
+            if target not in self._registry:
+                raise MissingDependencyError(
+                    target, required_by=hook_reg.setup or hook_reg.teardown
+                )
 
     def _check_missing(self) -> None:
         resolver = Resolver(self._registry)
@@ -338,11 +363,12 @@ class Container:
         cls,
         registry: dict[type, Registration],
         singletons: dict[type, Any],
-        hooks: dict[type, list[Registration]],
+        declared_hooks: list[Registration],
     ) -> Container:
         container = object.__new__(cls)
         container._registry = registry
-        container._hooks = hooks
+        container._declared_hooks = declared_hooks
+        container._hooks = {}
         container._singletons = singletons
         container._singleton_lifespans = {}
         container._singleton_locks = {}
@@ -351,10 +377,11 @@ class Container:
         container._root_scope = Scope(
             registry,
             singletons,
-            hooks,
+            container._hooks,
             container._singleton_lifespans,
             container._singleton_locks,
         )
+        container._index_hooks()
         return container
 
     def clone(self) -> Container:
@@ -373,10 +400,28 @@ class Container:
         cloned = self._from_parts(
             self._registry.copy(),
             singletons,
-            {k: list(v) for k, v in self._hooks.items()},
+            list(self._declared_hooks),
         )
         logger.debug("Cloned container")
         return cloned
+
+    def _lifetime_for_replacement(self, interface: type) -> Strategy:
+        """Return the lifetime a class that replaces this interface is built with.
+
+        An alias lives as long as what it points at. An instance was handed over
+        ready-made and lives as long as the container, which for something dixy
+        builds is a singleton. An alias that ends nowhere has no lifetime to
+        copy, so its replacement is built anew each time rather than cached
+        under a guessed one.
+        """
+        replaced = self._behind_aliases(interface) or self._registry[interface]
+        match replaced.strategy:
+            case Strategy.INSTANCE:
+                return Strategy.SINGLETON
+            case Strategy.ALIAS:
+                return Strategy.TRANSIENT
+            case strategy:
+                return strategy
 
     def override(
         self, *, interface: type, implementation: type[object] | object
@@ -385,11 +430,12 @@ class Container:
         if interface not in self._registry:
             raise MissingDependencyError(interface)
 
-        old_reg = self._registry[interface]
-
         if isinstance(implementation, type):
+            if self._registry[interface].strategy == Strategy.INSTANCE:
+                # The object bound so far would stay the cached answer.
+                self._singletons.pop(interface, None)
             self._registry[interface] = Registration(
-                strategy=old_reg.strategy,
+                strategy=self._lifetime_for_replacement(interface),
                 interface=interface,
                 implementation=implementation,
             )
@@ -400,6 +446,7 @@ class Container:
                 implementation=type(implementation),
             )
             self._singletons[interface] = implementation
+        self._index_hooks()
         logger.debug(
             "Overridden %s with %s",
             interface.__name__,

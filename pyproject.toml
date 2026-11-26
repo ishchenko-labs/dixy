@@ -1,6 +1,6 @@
 [project]
 name = "dixy"
-version = "2.1.0"
+version = "2.1.1"
 description = "Minimalist, type-driven dependency injection for async Python."
 readme = "README.md"
 license = "MIT"
@@ -33,6 +33,7 @@ Issues = "https://github.com/ishchenko-labs/dixy/issues"
 
 [dependency-groups]
 dev = [
+    "anyio>=4.16.0",
     "fastapi>=0.165.0",
     "httpx2>=2.16.2",
     "mypy>=2.4.1",
