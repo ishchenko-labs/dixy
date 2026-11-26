@@ -80,6 +80,12 @@ class Resolver:
 
         return deps
 
+    def get_setup_dependencies(self, setup: Callable[..., Any]) -> set[type]:
+        """Return what a setup callback needs besides the instance it sets up."""
+        instance_param = next(iter(inspect.signature(setup).parameters), None)
+        explicit_kwargs = {instance_param: None} if instance_param else {}
+        return self.get_dependencies(setup, explicit_kwargs)
+
     def _resolve_param(
         self,
         name: str,
