@@ -81,7 +81,8 @@ async def main() -> None:
             print(await greeter.greet(1))  # Hello, Ada!
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ## Injecting into handlers
