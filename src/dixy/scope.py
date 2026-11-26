@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, assert_never, cast, overload
 
 from .exceptions import InstanceNotProvidedError, MissingDependencyError
@@ -28,19 +29,63 @@ def _format_selector(selector: Selector) -> str:
     return ".".join(parts)
 
 
-def _exit_lifespan(cm: Any) -> Callable[[Any], Any]:
-    """Wrap a context manager exit into a teardown-callback shape (instance, fn)."""
+type Cleanup = Callable[[BaseException | None], Any]
+"""One cleanup step. It is given what ended the work it cleans up after, if anything."""
+
+
+def exit_lifespan(cm: Any, error: BaseException | None) -> Any:
+    """Exit a lifespan the way a with block would, handing it the error if there is one.
+
+    Its answer is ignored: a lifespan may react to the error, not swallow it.
+    """
+    details = (
+        (type(error), error, error.__traceback__)
+        if error is not None
+        else (None, None, None)
+    )
     if hasattr(cm, "__aexit__"):
+        return cm.__aexit__(*details)
+    return cm.__exit__(*details)
 
-        async def aexit(_instance: Any) -> None:
-            await cm.__aexit__(None, None, None)
 
-        return aexit
+def call_teardown(teardown: Callable[[Any], Any], instance: Any) -> Cleanup:
+    def cleanup(_error: BaseException | None) -> Any:
+        return teardown(instance)
 
-    def exit_(_instance: Any) -> None:
-        cm.__exit__(None, None, None)
+    return cleanup
 
-    return exit_
+
+async def run_cleanups(
+    cleanups: Iterable[Cleanup], error: BaseException | None
+) -> list[Exception]:
+    """Run every cleanup and return the failures, so one failure skips no other."""
+    failures: list[Exception] = []
+    for cleanup in cleanups:
+        try:
+            result = cleanup(error)
+            if inspect.isawaitable(result):
+                await result
+        except Exception as failure:
+            failures.append(failure)
+    return failures
+
+
+def raise_failures(failures: list[Exception]) -> None:
+    if len(failures) == 1:
+        raise failures[0]
+    if failures:
+        raise ExceptionGroup(f"{len(failures)} teardowns failed", failures)
+
+
+def note_failures(failures: list[Exception], error: BaseException, owner: str) -> None:
+    """Attach teardown failures to the error that is already on its way out.
+
+    That error stays the one that propagates: callers and frameworks handle it
+    by type, and a teardown failure must not disguise it.
+    """
+    for failure in failures:
+        logger.error("%s teardown failed", owner, exc_info=failure)
+        error.add_note(f"{owner} teardown also failed: {failure!r}")
 
 
 class Scope:
@@ -59,7 +104,7 @@ class Scope:
         self._singleton_locks = singleton_locks if singleton_locks is not None else {}
         self._scoped: dict[type, Any] = {}
         self._scoped_locks: dict[type, asyncio.Lock] = {}
-        self._teardown_callbacks: list[tuple[object, Callable[[Any], Any]]] = []
+        self._cleanups: list[Cleanup] = []
         self._resolver = Resolver(registry)
 
     @overload
@@ -152,10 +197,12 @@ class Scope:
             case Strategy.SCOPED:
                 self._scoped[interface] = instance
                 if reg.teardown:
-                    self._teardown_callbacks.append((instance, reg.teardown))
+                    self._cleanups.append(call_teardown(reg.teardown, instance))
                 for hook_reg in self._hooks.get(interface, []):
                     if hook_reg.teardown:
-                        self._teardown_callbacks.append((instance, hook_reg.teardown))
+                        self._cleanups.append(
+                            call_teardown(hook_reg.teardown, instance)
+                        )
             case Strategy.TRANSIENT | Strategy.INSTANCE | Strategy.ALIAS:
                 ...
             case Strategy.HOOK:
@@ -198,12 +245,12 @@ class Scope:
             instance = await cm.__aenter__()
         else:
             instance = cm.__enter__()
-        self._record_lifespan(reg, cm, instance)
+        self._record_lifespan(reg, cm)
         return instance
 
-    def _record_lifespan(self, reg: Registration, cm: Any, instance: Any) -> None:
+    def _record_lifespan(self, reg: Registration, cm: Any) -> None:
         if reg.strategy == Strategy.SCOPED:
-            self._teardown_callbacks.append((instance, _exit_lifespan(cm)))
+            self._cleanups.append(functools.partial(exit_lifespan, cm))
         elif reg.strategy == Strategy.SINGLETON:
             if self._singleton_lifespans is None:
                 msg = "singleton lifespan requires a Container-managed scope"
@@ -243,13 +290,16 @@ class Scope:
         logger.debug("Resolved selector %s", _format_selector(selector))
         return result
 
-    async def teardown(self) -> None:
-        """Tear down all scoped dependencies in reverse creation order."""
-        torn_down = 0
-        for instance, teardown_fn in reversed(self._teardown_callbacks):
-            result = teardown_fn(instance)
-            if asyncio.iscoroutine(result):
-                await result
-            torn_down += 1
-        if torn_down:
-            logger.debug("Scope torn down, %d instances cleaned up", torn_down)
+    async def teardown(self, error: BaseException | None = None) -> None:
+        """Tear down all scoped dependencies in reverse creation order.
+
+        Every cleanup runs even if an earlier one fails; the failures are raised
+        once all have run. Pass the error that ended the scope's work, if one
+        did: lifespans receive it on exit.
+        """
+        cleanups = list(reversed(self._cleanups))
+        self._cleanups.clear()
+        failures = await run_cleanups(cleanups, error)
+        if cleanups:
+            logger.debug("Scope torn down, %d cleanups run", len(cleanups))
+        raise_failures(failures)

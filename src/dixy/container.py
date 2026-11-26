@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import (
@@ -22,7 +23,15 @@ from .exceptions import (
 )
 from .module import Module
 from .resolver import Resolver
-from .scope import Scope
+from .scope import (
+    Cleanup,
+    Scope,
+    call_teardown,
+    exit_lifespan,
+    note_failures,
+    raise_failures,
+    run_cleanups,
+)
 from .types import Registration, Strategy
 
 logger = logging.getLogger(__name__)
@@ -177,7 +186,13 @@ class Container:
         child = self._new_scope()
         try:
             yield child
-        finally:
+        except BaseException as error:
+            try:
+                await child.teardown(error)
+            except Exception as failure:
+                note_failures([failure], error, owner="Scope")
+            raise
+        else:
             await child.teardown()
 
     async def __aenter__(self) -> Self:
@@ -198,41 +213,40 @@ class Container:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if self._async_stack is not None:
-            await self._async_stack.__aexit__(exc_type, exc_val, exc_tb)
-        await self._teardown_singletons()
+        cleanups = self._singleton_cleanups()
+        if (stack := self._async_stack) is not None:
+            self._async_stack = None
+            cleanups.insert(0, functools.partial(exit_lifespan, stack))
+        failures = await run_cleanups(cleanups, exc_val)
+        logger.info("Container closed, %d cleanups run", len(cleanups))
+        if exc_val is None:
+            raise_failures(failures)
+        else:
+            note_failures(failures, exc_val, owner="Container")
 
-    async def _teardown_singletons(self) -> None:
-        """Tear down created singletons in reverse creation order.
+    def _singleton_cleanups(self) -> list[Cleanup]:
+        """Collect the cleanups of created singletons in reverse creation order.
 
         Iterates the singleton cache, whose insertion order is creation order,
         so a dependency is never disposed before the singleton that holds it.
         """
-        torn_down = 0
+        cleanups: list[Cleanup] = []
         for interface in reversed(list(self._singletons)):
             reg = self._registry.get(interface)
             if reg is None or reg.strategy != Strategy.SINGLETON:
                 continue
             instance = self._singletons[interface]
             if reg.teardown:
-                result = reg.teardown(instance)
-                if asyncio.iscoroutine(result):
-                    await result
-                torn_down += 1
+                cleanups.append(call_teardown(reg.teardown, instance))
             if interface in self._singleton_lifespans:
                 cm = self._singleton_lifespans.pop(interface)
-                if hasattr(cm, "__aexit__"):
-                    await cm.__aexit__(None, None, None)
-                else:
-                    cm.__exit__(None, None, None)
-                torn_down += 1
-            for hook_reg in self._hooks.get(interface, []):
-                if hook_reg.teardown:
-                    result = hook_reg.teardown(instance)
-                    if asyncio.iscoroutine(result):
-                        await result
-                    torn_down += 1
-        logger.info("Container closed, %d singletons torn down", torn_down)
+                cleanups.append(functools.partial(exit_lifespan, cm))
+            cleanups.extend(
+                call_teardown(hook_reg.teardown, instance)
+                for hook_reg in self._hooks.get(interface, [])
+                if hook_reg.teardown
+            )
+        return cleanups
 
     def validate(self) -> None:
         """Validate the dependency graph at startup."""
