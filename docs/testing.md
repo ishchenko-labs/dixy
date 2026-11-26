@@ -28,6 +28,9 @@ Overrides on a clone never reach the original, so a test cannot leak into the ne
 | A class    | Is built by dixy from its own constructor, with the lifetime of the original     |
 | An object  | Is used as it is. The container neither builds nor closes it                     |
 
+For an alias the lifetime of the original is that of its source. For an `instance` it is the
+container's: the replacement is built once and replaces the object you bound.
+
 A replacement class starts clean: the original provider's keyword arguments, factory, setup,
 teardown and lifespan do not apply to it. Give a fake constructor defaults for the plain values it
 needs, or pass a ready object.
@@ -35,8 +38,9 @@ needs, or pass a ready object.
 Three things to keep in mind:
 
 - Override before the dependency is first used. A singleton that already exists stays in place.
-- Override the interface that the provider is registered under. For an
-  [alias](providers.md#sharing-one-instance-under-two-interfaces), override its source.
+- Overriding an [alias](providers.md#sharing-one-instance-under-two-interfaces) replaces that
+  interface only: whoever asks for its source still gets the real one. Override the source to
+  replace both.
 - Validate after overriding. A fake with different dependencies changes the wiring, and validation
   tells you so immediately.
 

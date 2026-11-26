@@ -378,6 +378,24 @@ class Container:
         logger.debug("Cloned container")
         return cloned
 
+    def _lifetime_for_replacement(self, interface: type) -> Strategy:
+        """Return the lifetime a class that replaces this interface is built with.
+
+        An alias lives as long as what it points at. An instance was handed over
+        ready-made and lives as long as the container, which for something dixy
+        builds is a singleton. An alias that ends nowhere has no lifetime to
+        copy, so its replacement is built anew each time rather than cached
+        under a guessed one.
+        """
+        replaced = self._behind_aliases(interface) or self._registry[interface]
+        match replaced.strategy:
+            case Strategy.INSTANCE:
+                return Strategy.SINGLETON
+            case Strategy.ALIAS:
+                return Strategy.TRANSIENT
+            case strategy:
+                return strategy
+
     def override(
         self, *, interface: type, implementation: type[object] | object
     ) -> None:
@@ -385,11 +403,12 @@ class Container:
         if interface not in self._registry:
             raise MissingDependencyError(interface)
 
-        old_reg = self._registry[interface]
-
         if isinstance(implementation, type):
+            if self._registry[interface].strategy == Strategy.INSTANCE:
+                # The object bound so far would stay the cached answer.
+                self._singletons.pop(interface, None)
             self._registry[interface] = Registration(
-                strategy=old_reg.strategy,
+                strategy=self._lifetime_for_replacement(interface),
                 interface=interface,
                 implementation=implementation,
             )
