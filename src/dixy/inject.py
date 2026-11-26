@@ -34,7 +34,9 @@ class _InjectDecorator(Protocol):
     ) -> Callable[..., Coroutine[Any, Any, R]]: ...
 
 
-def inject(source: Container | Callable[[], Container]) -> _InjectDecorator:
+def inject(
+    source: Container | Callable[[], Container | None],
+) -> _InjectDecorator:
     """Inject dependencies marked with Inject[T] into async function parameters.
 
     Accepts a container instance, or a no-arg accessor returning the active
@@ -88,7 +90,9 @@ def _hide_injected_params(
     }
 
 
-def _resolve_source(source: Container | Callable[[], Container]) -> Container:
+def _resolve_source(
+    source: Container | Callable[[], Container | None],
+) -> Container:
     if isinstance(source, Container):
         return source
     container = source()

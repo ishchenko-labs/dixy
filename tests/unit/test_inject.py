@@ -53,8 +53,8 @@ class TestInjectDecorator:
                 return db
 
     async def test_raises_when_accessor_returns_no_container(self) -> None:
-        def no_container() -> Container:
-            return None  # type: ignore[return-value]  # simulate missing container
+        def no_container() -> Container | None:
+            return None
 
         @inject(no_container)
         async def handler(repo: Inject[SampleRepo]) -> SampleRepo:
