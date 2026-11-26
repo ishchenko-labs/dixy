@@ -1,6 +1,6 @@
 [project]
 name = "dixy"
-version = "2.0.0"
+version = "2.1.0"
 description = "Minimalist, type-driven dependency injection for async Python."
 readme = "README.md"
 license = "MIT"
