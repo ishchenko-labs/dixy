@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-11-26
+
+### Fixed
+
+- Run the remaining teardowns when the task is cancelled during one. The lifespans among them are
+  told about the cancellation, and it is raised again once they have run
+- Report a hook on an interface no module provides from `validate`, instead of never running it
+- Run a hook declared on an alias, for the instance behind the alias
+- Make `override` with a class take effect on an alias and on an `instance`: the replacement gets
+  the lifetime of the alias's source, or is built once in place of the bound object
+
 ## [2.1.0] - 2026-11-26
 
 ### Added
@@ -48,6 +59,7 @@ which was published only privately.
 - Remove the `sanepy` dependency: dixy has no runtime dependencies
 - Remove the `dixy.testing` sample classes from the package
 
-[Unreleased]: https://github.com/ishchenko-labs/dixy/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/ishchenko-labs/dixy/compare/v2.1.1...HEAD
+[2.1.1]: https://github.com/ishchenko-labs/dixy/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/ishchenko-labs/dixy/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/ishchenko-labs/dixy/releases/tag/v2.0.0
