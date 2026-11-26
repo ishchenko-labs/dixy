@@ -115,7 +115,9 @@ test.validate()
 
 The [documentation](https://github.com/ishchenko-labs/dixy/blob/main/docs/README.md) covers every
 provider, the container and scope API, auto-resolve rules, selectors, FastAPI and Temporal
-integration, and testing recipes.
+integration, and testing recipes. Every file in
+[`examples/`](https://github.com/ishchenko-labs/dixy/tree/main/examples) is a small application that
+runs on its own.
 
 ## Contributing
 

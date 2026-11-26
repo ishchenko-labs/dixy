@@ -27,9 +27,9 @@ EXPECTED_OUTPUT = {
         "database connected to postgres://localhost/app",
         "bus handlers: ['audit log in postgres://localhost/app']",
         "transaction opened",
-        "transaction is open",
         "transaction committed",
-        "transaction is committed",
+        "transaction opened",
+        "transaction rolled back",
         "database disconnected",
     ],
     "settings_fields.py": [
@@ -100,11 +100,11 @@ def test_example_prints_its_expected_output(example: str) -> None:
 
 class TestFastApiExample:
     @pytest.fixture
-    def client(self) -> TestClient:
-        return TestClient(load("fastapi_app.py").app)
+    def example(self) -> ModuleType:
+        return load("fastapi_app.py")
 
-    def test_greets_a_user_through_the_request_scope(self, client: TestClient) -> None:
-        with client:
+    def test_greets_a_user_through_the_request_scope(self, example: ModuleType) -> None:
+        with TestClient(example.app) as client:
             response = client.get("/users/1")
 
         assert response.status_code == 200
@@ -113,15 +113,20 @@ class TestFastApiExample:
             "lookups_in_this_request": 1,
         }
 
-    def test_every_request_gets_a_fresh_scope(self, client: TestClient) -> None:
-        with client:
+    def test_every_request_gets_a_fresh_scope(self, example: ModuleType) -> None:
+        with TestClient(example.app) as client:
             client.get("/users/1")
             response = client.get("/users/2")
 
         assert response.json()["lookups_in_this_request"] == 1
 
-    def test_unknown_user_is_not_found(self, client: TestClient) -> None:
-        with client:
-            response = client.get("/users/3")
+    async def test_unit_of_work_commits_or_rolls_back_with_the_request(
+        self, example: ModuleType
+    ) -> None:
+        with TestClient(example.app) as client:
+            found = client.get("/users/1")
+            missing = client.get("/users/3")
+            audit = await example.app.state.container.resolve(example.AuditLog)
 
-        assert response.status_code == 404
+        assert (found.status_code, missing.status_code) == (200, 404)
+        assert audit.outcomes == ["committed", "rolled back"]

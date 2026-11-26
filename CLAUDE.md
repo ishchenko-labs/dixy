@@ -13,7 +13,9 @@ Part of the `ishchenko-labs` libraries. Public, MIT-licensed, published on PyPI.
 - No runtime dependencies: anything dixy needs must come from the standard library.
 - Supports every Python from `requires-python` up: CI runs the tests on each. Code must not use
   syntax or stdlib APIs newer than the oldest one (ruff and mypy target it).
-- The README quick start is a test (`tests/docs/test_readme.py`): keep it runnable on its own.
+- The README quick start and every file in `examples/` are tests (`tests/docs/`): keep each runnable
+  on its own, and the quick start identical to `examples/quickstart.py`. A new example needs its
+  expected output there.
 - Releasing: bump `version` in `pyproject.toml` (semver: major for a breaking change, minor for a
   new feature, patch otherwise). When the bump lands on `main`, the Release workflow tags
   `v<version>`, publishes the wheel and sdist to PyPI through Trusted Publishing (GitHub

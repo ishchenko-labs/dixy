@@ -26,23 +26,42 @@ class UserRepository:
         return self.names.get(user_id)
 
 
-class RequestStats:
+class AuditLog:
+    """Singleton: outlives requests and records how each one ended."""
+
+    def __init__(self) -> None:
+        self.outcomes: list[str] = []
+
+
+class UnitOfWork:
     """Scoped: one per request, shared by everything resolved in that request."""
 
     def __init__(self) -> None:
         self.lookups = 0
 
 
+@asynccontextmanager
+async def unit_of_work(audit: AuditLog) -> AsyncIterator[UnitOfWork]:
+    """Commit when the request succeeds, roll back when it raises."""
+    try:
+        yield UnitOfWork()
+    except BaseException:
+        audit.outcomes.append("rolled back")
+        raise
+    else:
+        audit.outcomes.append("committed")
+
+
 class UserService:
     def __init__(
-        self, settings: Settings, users: UserRepository, stats: RequestStats
+        self, settings: Settings, users: UserRepository, work: UnitOfWork
     ) -> None:
         self.settings = settings
         self.users = users
-        self.stats = stats
+        self.work = work
 
     def greet(self, user_id: int) -> str | None:
-        self.stats.lookups += 1
+        self.work.lookups += 1
         name = self.users.find(user_id)
         return f"{self.settings.greeting}, {name}!" if name else None
 
@@ -50,7 +69,8 @@ class UserService:
 class AppModule(Module):
     settings = instance(Settings)
     users = singleton(UserRepository)
-    stats = scoped(RequestStats)
+    audit = singleton(AuditLog)
+    work = scoped(UnitOfWork, lifespan=unit_of_work)
     service = scoped(UserService)
 
 
@@ -89,9 +109,9 @@ app = FastAPI(lifespan=lifespan)
 async def greet_user(
     user_id: int,
     service: Annotated[UserService, resolved(UserService)],
-    stats: Annotated[RequestStats, resolved(RequestStats)],
+    work: Annotated[UnitOfWork, resolved(UnitOfWork)],
 ) -> dict[str, str | int]:
     greeting = service.greet(user_id)
     if greeting is None:
         raise HTTPException(status_code=404, detail="No such user")
-    return {"greeting": greeting, "lookups_in_this_request": stats.lookups}
+    return {"greeting": greeting, "lookups_in_this_request": work.lookups}

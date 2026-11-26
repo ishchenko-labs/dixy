@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 
 from dixy import Container, Module, scoped, singleton
@@ -52,14 +52,18 @@ def register_handlers(bus: EventBus, database: Database) -> None:
 
 @asynccontextmanager
 async def transaction(database: Database) -> AsyncIterator[Transaction]:
-    """Pair creation and cleanup in one place, as a lifespan."""
+    """Pair creation and cleanup in one place, and learn how the scope ended."""
     tx = Transaction(database)
     print("transaction opened")
     try:
         yield tx
-    finally:
+    except BaseException:
+        tx.state = "rolled back"
+        raise
+    else:
         tx.state = "committed"
-        print("transaction committed")
+    finally:
+        print(f"transaction {tx.state}")
 
 
 class AppModule(Module):
@@ -83,9 +87,12 @@ async def main() -> None:
         print(f"bus handlers: {bus.handlers}")
 
         async with container.scope() as scope:
-            tx = await scope.resolve(Transaction)
-            print(f"transaction is {tx.state}")
-        print(f"transaction is {tx.state}")
+            await scope.resolve(Transaction)
+
+        with suppress(ZeroDivisionError):
+            async with container.scope() as scope:
+                await scope.resolve(Transaction)
+                print(1 / 0)
 
 
 if __name__ == "__main__":
